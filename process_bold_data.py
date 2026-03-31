@@ -74,6 +74,11 @@ def main(source_dir, subject, results_path, **kwargs):
     cii_input_files = []
     for file_in in os.listdir(str(SUBJECT_DIR.resolve())):
         match_object = re.match(r'(sub-[0-9]{2,3})(_ses-[0-9]{1,2})?_(task-rest_run-[0-9]{1,2})(.*_bold)\.dtseries\.nii', file_in)
+        # Match object groups:
+        # Group 1: subject number
+        # Group 2: session number
+        # Group 3: run number
+        # Group 4: prefix before 'bold'
         if match_object:
             cii_input_files.append(match_object)
         
@@ -91,6 +96,7 @@ def main(source_dir, subject, results_path, **kwargs):
     logger.addHandler(file_log_handler)
 
     # Start processing files
+    cii_input_files.sort(key=lambda x: x.group(3))
     for cii_input in cii_input_files:
         settings = load_settings(source_dir, cii_input.group(1), cii_input.group(3), session_id=kwargs.get('session_id'), settings_file=kwargs.get('settings'))
         input_file = SUBJECT_DIR / f'{cii_input.group(0)}'
@@ -242,11 +248,26 @@ def main(source_dir, subject, results_path, **kwargs):
         output_img = nb.cifti2.cifti2.Cifti2Image(np.single(data_filtered), header)
         output_img.to_filename((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_{cii_input.group(4)}_postproc.dtseries.nii').resolve())        
 
-    combined_img = nb.cifti2.cifti2.Cifti2Image(np.single(combined_data_filtered), combined_header)
-    combined_filename = f'{cii_input.group(1)}'
-    if cii_input.group(2):
-        combined_filename += f'{cii_input.group(2)}'
-    combined_img.to_filename((OUTPUT_DIR / f'{combined_filename}_combined_postproc.dtseries.nii').resolve())
+        if cii_input == cii_input_files[0]:
+            combined_filename = f'{cii_input.group(1)}_task-rest_run-combined_{cii_input.group(4)}'
+            shutil.copy((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_{cii_input.group(4)}_postproc.dtseries.nii').resolve(), (OUTPUT_DIR / f'{combined_filename}_postproc.dtseries.nii').resolve())
+        else:
+            concatanate_cmd = [
+                '/usr/local/bin/wb_command',
+                '-cifti-merge',
+                (OUTPUT_DIR / f'{combined_filename}_postproc.dtseries.nii').resolve(),
+                '-cifti',
+                (OUTPUT_DIR / f'{combined_filename}_postproc.dtseries.nii').resolve(),
+                '-cifti',
+                (OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_{cii_input.group(4)}_postproc.dtseries.nii').resolve()
+            ]
+            with Popen(concatanate_cmd, stdout=PIPE, stderr=PIPE) as p:
+                while p.poll() is None:
+                    for line in p.stdout:
+                        print(line.decode(), end='')
+                if p.poll() != 0:
+                    raise RuntimeError('Error during concatating runs')
+        
     np.savetxt((OUTPUT_DIR / f'{combined_filename}_combined_framewise_displacement.txt').resolve(), combined_framewise_displacement)
     if save_figs:
         plt.figure(figsize=(8, 4))
