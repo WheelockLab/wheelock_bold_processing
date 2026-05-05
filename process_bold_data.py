@@ -64,7 +64,7 @@ def main(source_dir, subject, results_path, **kwargs):
         OUTPUT_DIR = OUTPUT_DIR / 'no_gsr'
     # if OUTPUT_DIR.resolve().exists():
     #     shutil.rmtree(OUTPUT_DIR.resolve())
-    OUTPUT_DIR.resolve().mkdir(parents=True)
+    OUTPUT_DIR.resolve().mkdir(parents=True, exist_ok=True)
 
     SOURCE_DIR = Path(source_dir)
     SUBJECT_DIR = SOURCE_DIR / f'{subject}'
@@ -142,13 +142,7 @@ def main(source_dir, subject, results_path, **kwargs):
             combined_keepframes = np.hstack((combined_keepframes, keepframes))
 
         if save_figs:
-            plt.figure(figsize=(8, 4))
-            for j in np.where(keepframes == 0)[0]:
-                plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
-            plt.plot(framewise_displacement, linewidth=1)
-            plt.title('Framewise Displacement')
-            plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_fd_trace.png').resolve(), format='png', dpi=300)
-            plt.close()
+            plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes)
 
         regressors = frisson_regressors # no GSR
         if gsr:
@@ -270,13 +264,7 @@ def main(source_dir, subject, results_path, **kwargs):
         
     np.savetxt((OUTPUT_DIR / f'{combined_filename}_combined_framewise_displacement.txt').resolve(), combined_framewise_displacement)
     if save_figs:
-        plt.figure(figsize=(8, 4))
-        for j in np.where(combined_keepframes == 0)[0]:
-            plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
-        plt.plot(combined_framewise_displacement, linewidth=1)
-        plt.title(f'Framewise Displacement\nTotal Time: {int(TR * len(combined_keepframes))} seconds Usable Time: {int(TR * len(np.where(combined_keepframes == True)[0]))} seconds {int(100 * len(np.where(combined_keepframes == True)[0]) / len(combined_keepframes))}%')
-        plt.savefig((OUTPUT_DIR / f'{combined_filename}_combined_fd_trace.png').resolve(), format='png', dpi=300)
-        plt.close()
+        plot_framewise_displacement(OUTPUT_DIR, TR, combined_framewise_displacement, cii_input, combined_keepframes, combined=True)
 
     parcellate_data(OUTPUT_DIR)
 
@@ -460,6 +448,23 @@ def create_functional_connectivity(parcellated_data_files, save_figs=False):
             IM_333 = IM_333.IM
             plt.figure(figsize=(8, 4))
             
+def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, combined=False):
+    fig = plt.figure(figsize=(8, 4))
+    ax = plt.axes()
+    ticks = [x for x in range(len(framewise_displacement))]
+    tick_labels = [x * tr for x in range(len(framewise_displacement))]
+    for j in np.where(keepframes == 0)[0]:
+        plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
+    plt.plot(ticks, framewise_displacement, linewidth=1)
+    ax.set_xlim(left=0, right=ticks[-1])
+    plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
+    plt.title(f'Framewise Displacement\nTotal Time: {int(tr * len(keepframes))} seconds Usable Time: {int(tr * len(np.where(keepframes == True)[0]))} seconds {int(100 * len(np.where(keepframes == True)[0]) / len(keepframes))}%')
+    plt.xlabel('Time (s)')
+    save_fig_name = output_dir / f'{cii_input_match.group(1)}_{cii_input_match.group(3)}_fd_trace.png'
+    if combined:
+        save_fig_name = output_dir / f'{cii_input_match.group(1)}_combined_fd_trace.png'
+    plt.savefig(save_fig_name.resolve(), format='png', dpi=300)
+    plt.close()
 
 def matrix_org3(figure_object, data_matrix, key, buffer, limits, color_map, colormap_data):
     dim_y, dim_x = data_matrix.shape
