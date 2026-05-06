@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument('--lp_hz', help='Low-frequency cut-off for filtering signal. Default: 0.009', type=float, default=0.009)
     parser.add_argument('--hp_hz', help='High-frequency cut-off for filtering signal. Default: 0.08', type=float, default=0.08)
     parser.add_argument('--bp_order', help='Butterworth filter order. Default: 2', type=int, default=2)
+    parser.add_argument('--filter_fd', help='Filter framewise displacement with notch filter for respiration artifact', action='store true')
     return parser.parse_args()
 
 def main(source_dir, subject, results_path, **kwargs):
@@ -51,6 +52,7 @@ def main(source_dir, subject, results_path, **kwargs):
     session_id = kwargs['session_id'] if 'session_id' in kwargs else False
     lowpass_hz = kwargs.get('lp_hz')
     highpass_hz = kwargs.get('hp_hz')
+    filter_fd = True if 'filter_fd' in kwargs and kwargs['filter_fd'] else False
 
     # Set up all output directories
     OUTPUT_DIR = Path(results_path)
@@ -144,6 +146,26 @@ def main(source_dir, subject, results_path, **kwargs):
         if save_figs:
             plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes)
 
+        sampling_freq = 1 / TR
+        nyquist_freq = sampling_freq / 2
+
+        if filter_fd:
+            iir_filter_numerator, iir_filter_denominator = scipy.signal.iirnotch(0.375 / nyquist_freq, 0.375 / 0.25, fs=sampling_freq)
+            padding = np.zeros_like(framewise_displacement)
+            padding_amount = padding.shape[0]
+
+            temp_padded_fd = np.vstack((padding, framewise_displacement, padding))
+            filtered_framewise_displacement = scipy.signal.filtfilt(iir_filter_numerator, iir_filter_denominator, temp_padded_fd, axis=0, padtype=None)
+            filtered_framewise_displacement = filtered_framewise_displacement[padding_amount:-padding_amount]
+
+            if save_figs:
+                plot_framewise_displacement(OUTPUT_DIR, TR, filtered_framewise_displacement, cii_input, keepframes)
+
+            framewise_displacement = filtered_framewise_displacement
+            filtered_framewise_displacement_file_name = OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_filtered_framewise_displacement.txt'
+            np.savetxt(filtered_framewise_displacement_file_name.resolve(), framewise_displacement)
+            logger.info(f'Saving regressor file {filtered_framewise_displacement_file_name}')    
+
         regressors = frisson_regressors # no GSR
         if gsr:
             glob = np.concatenate((settings['white_matter'].to_numpy().reshape(-1, 1), settings['csf'].to_numpy().reshape(-1, 1), settings['global_signal'].to_numpy().reshape(-1, 1)), axis=1)
@@ -205,8 +227,6 @@ def main(source_dir, subject, results_path, **kwargs):
         data_interpolated = data_post_regression.copy()
         data_interpolated[keepframes == 0, :] = y_removed
 
-        sampling_freq = 1 / TR
-        nyquist_freq = sampling_freq / 2
         butterworth_filter_numerator, butterworth_filter_denominator = scipy.signal.butter(bp_order / 2, np.array([lowpass_hz, highpass_hz]) / nyquist_freq, 'bandpass')
 
         padding = np.zeros_like(data_interpolated)
