@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument('--lp_hz', help='Low-frequency cut-off for filtering signal. Default: 0.009', type=float, default=0.009)
     parser.add_argument('--hp_hz', help='High-frequency cut-off for filtering signal. Default: 0.08', type=float, default=0.08)
     parser.add_argument('--bp_order', help='Butterworth filter order. Default: 2', type=int, default=2)
-    parser.add_argument('--filter_fd', help='Filter framewise displacement with notch filter for respiration artifact', action='store true')
+    parser.add_argument('--filter_fd', help='Filter framewise displacement with notch filter for respiration artifact (9 - 30 bpm)', action='store_true')
     return parser.parse_args()
 
 def main(source_dir, subject, results_path, **kwargs):
@@ -123,25 +123,20 @@ def main(source_dir, subject, results_path, **kwargs):
             TR /= 1000 # account for ms in some headers
         logger.info(f'TR: {TR} s')
 
-        frisson_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
-        framewise_displacement, mean_framewise_displacement = calculate_framewise_displacement(
-            frisson_regressors[:, :6], FD_type=fd_type
-        )
+        friston_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
+        friston_regressors_file_name = OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_friston_regressors.txt'
+        np.savetxt(friston_regressors_file_name.resolve(), friston_regressors)
+        logger.info(f'Saving friston regressors file {friston_regressors_file_name}')
+        framewise_displacement, _ = calculate_framewise_displacement(friston_regressors[:, :6], FD_type=fd_type)
         framewise_displacement_file_name = OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_framewise_displacement.txt'
         np.savetxt(framewise_displacement_file_name.resolve(), framewise_displacement)
-        logger.info(f'Saving regressor file {framewise_displacement_file_name}')
-        
+        logger.info(f'Saving framewise displacement file {framewise_displacement_file_name}')
+
         keepframes = np.full(len(framewise_displacement), True)
         if fd_max > 0:
             keepframes = framewise_displacement <= fd_max
         skip_frames = np.int8(np.floor(skip_seconds / TR))
         keepframes[:skip_frames] = False
-        if cii_input == cii_input_files[0]:
-            combined_framewise_displacement = framewise_displacement.copy()
-            combined_keepframes = keepframes.copy()
-        else:
-            combined_framewise_displacement = np.hstack((combined_framewise_displacement, framewise_displacement))
-            combined_keepframes = np.hstack((combined_keepframes, keepframes))
 
         if save_figs:
             plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes)
@@ -150,27 +145,44 @@ def main(source_dir, subject, results_path, **kwargs):
         nyquist_freq = sampling_freq / 2
 
         if filter_fd:
-            iir_filter_numerator, iir_filter_denominator = scipy.signal.iirnotch(0.375 / nyquist_freq, 0.375 / 0.25, fs=sampling_freq)
-            padding = np.zeros_like(framewise_displacement)
+            respiration_lowpass = 9 / 60
+            respiration_highpass = 30 / 60
+            if respiration_highpass > nyquist_freq:
+                respiration_highpass = nyquist_freq - 0.0001
+            respiration_filter_order = 2
+            respiration_numerator, respiration_denominator = scipy.signal.butter(respiration_filter_order, [respiration_lowpass, respiration_highpass], btype='bandstop', fs=sampling_freq)
+
+            padding = np.zeros_like(settings['movement_regressors'].to_numpy())
             padding_amount = padding.shape[0]
 
-            temp_padded_fd = np.vstack((padding, framewise_displacement, padding))
-            filtered_framewise_displacement = scipy.signal.filtfilt(iir_filter_numerator, iir_filter_denominator, temp_padded_fd, axis=0, padtype=None)
-            filtered_framewise_displacement = filtered_framewise_displacement[padding_amount:-padding_amount]
+            temp_movement = np.vstack((padding, settings['movement_regressors'].to_numpy(), padding))
+            movement_filtered = scipy.signal.filtfilt(respiration_numerator, respiration_denominator, temp_movement, axis=0, padtype=None)
+            movement_filtered = movement_filtered[padding_amount:-padding_amount]
 
+            friston_regressors = make_friston_regressors(movement_filtered, brain_radius)
+            framewise_displacement, _ = calculate_framewise_displacement(friston_regressors[:, :6], FD_type=fd_type)
+
+            keepframes = np.full(len(framewise_displacement), True)
+            if fd_max > 0:
+                keepframes = framewise_displacement <= fd_max
+            skip_frames = np.int8(np.floor(skip_seconds / TR))
+            keepframes[:skip_frames] = False
+            
             if save_figs:
-                plot_framewise_displacement(OUTPUT_DIR, TR, filtered_framewise_displacement, cii_input, keepframes)
+                plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, suffix='filtered')
 
-            framewise_displacement = filtered_framewise_displacement
-            filtered_framewise_displacement_file_name = OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_filtered_framewise_displacement.txt'
-            np.savetxt(filtered_framewise_displacement_file_name.resolve(), framewise_displacement)
-            logger.info(f'Saving regressor file {filtered_framewise_displacement_file_name}')    
-
-        regressors = frisson_regressors # no GSR
+        if cii_input == cii_input_files[0]:
+            combined_framewise_displacement = framewise_displacement.copy()
+            combined_keepframes = keepframes.copy()
+        else:
+            combined_framewise_displacement = np.hstack((combined_framewise_displacement, framewise_displacement))
+            combined_keepframes = np.hstack((combined_keepframes, keepframes))
+    
+        regressors = friston_regressors # no GSR
         if gsr:
             glob = np.concatenate((settings['white_matter'].to_numpy().reshape(-1, 1), settings['csf'].to_numpy().reshape(-1, 1), settings['global_signal'].to_numpy().reshape(-1, 1)), axis=1)
             d_glob = np.vstack(([0, 0, 0], np.diff(glob, axis=0)))
-            regressors = np.concatenate((glob, d_glob, frisson_regressors), axis=1) # GSR
+            regressors = np.concatenate((glob, d_glob, friston_regressors), axis=1) # GSR
 
         logger.info('Calculating regressors...')
         regressors = regressors - np.mean(regressors[keepframes, :], axis=0)
@@ -190,27 +202,30 @@ def main(source_dir, subject, results_path, **kwargs):
             plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_all.png').resolve(), format='png', dpi=300)
             plt.close()
 
-            plt.figure(figsize=(8, 4))
-            X = detrend_data.copy()
-            X[np.where(keepframes == 1)][0] = np.NaN
-            im = plt.imshow(X.transpose(), aspect='auto', cmap='gray')
-            plt.colorbar(location='right')
-            im.set_clim(crange)
-            plt.yticks([])
-            plt.xlabel('TR')
-            plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_removed.png').resolve(), format='png', dpi=300)
-            plt.close()
 
-            plt.figure(figsize=(8, 4))
-            X = detrend_data.copy()
-            X[np.where(keepframes == 0)][0] = np.NaN
-            im = plt.imshow(X.transpose(), aspect='auto', cmap='gray')
-            plt.colorbar(location='right')
-            im.set_clim(crange)
-            plt.yticks([])
-            plt.xlabel('TR')
-            plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_retained.png').resolve(), format='png', dpi=300)
-            plt.close()
+            ## 5/12/26 Commenting these out because I'm unsure of what they are actually plotting - Jim
+            
+            # plt.figure(figsize=(8, 4))
+            # X = detrend_data.copy()
+            # X[np.where(keepframes == 1)][0] = np.NaN
+            # im = plt.imshow(X.transpose(), aspect='auto', cmap='gray')
+            # plt.colorbar(location='right')
+            # im.set_clim(crange)
+            # plt.yticks([])
+            # plt.xlabel('TR')
+            # plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_removed.png').resolve(), format='png', dpi=300)
+            # plt.close()
+
+            # plt.figure(figsize=(8, 4))
+            # X = detrend_data.copy()
+            # X[np.where(keepframes == 0)][0] = np.NaN
+            # im = plt.imshow(X.transpose(), aspect='auto', cmap='gray')
+            # plt.colorbar(location='right')
+            # im.set_clim(crange)
+            # plt.yticks([])
+            # plt.xlabel('TR')
+            # plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_retained.png').resolve(), format='png', dpi=300)
+            # plt.close()
 
         b, _, _, _ = np.linalg.lstsq(regressors[keepframes, :], detrend_data[keepframes, :], rcond=None)
         data_post_regression = detrend_data - regressors @ b
@@ -468,11 +483,11 @@ def create_functional_connectivity(parcellated_data_files, save_figs=False):
             IM_333 = IM_333.IM
             plt.figure(figsize=(8, 4))
             
-def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, combined=False):
+def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, combined=False, suffix=''):
     fig = plt.figure(figsize=(8, 4))
     ax = plt.axes()
     ticks = [x for x in range(len(framewise_displacement))]
-    tick_labels = [x * tr for x in range(len(framewise_displacement))]
+    tick_labels = [int(x * tr) for x in range(len(framewise_displacement))]
     for j in np.where(keepframes == 0)[0]:
         plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
     plt.plot(ticks, framewise_displacement, linewidth=1)
@@ -480,7 +495,10 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
     plt.title(f'Framewise Displacement\nTotal Time: {int(tr * len(keepframes))} seconds Usable Time: {int(tr * len(np.where(keepframes == True)[0]))} seconds {int(100 * len(np.where(keepframes == True)[0]) / len(keepframes))}%')
     plt.xlabel('Time (s)')
-    save_fig_name = output_dir / f'{cii_input_match.group(1)}_{cii_input_match.group(3)}_fd_trace.png'
+    fig_file_name = f'{cii_input_match.group(1)}_{cii_input_match.group(3)}'
+    if len(suffix) > 0:
+        fig_file_name = f'{fig_file_name}_{suffix}'
+    save_fig_name = output_dir / f'{fig_file_name}_fd_trace.png'
     if combined:
         save_fig_name = output_dir / f'{cii_input_match.group(1)}_combined_fd_trace.png'
     plt.savefig(save_fig_name.resolve(), format='png', dpi=300)
