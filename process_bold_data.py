@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument('--fd_type', help='L1 (1) or L2 (2). Default: 1', type=int, default=1)
     parser.add_argument('--fd_thr', help='Threshold level for framewise displacement (default: 0.2)', type=float, default=0.2)
     parser.add_argument('--brain_radius', help='Estimate of brain radius in mm. Default: 50', type=int, default=50)
+    parser.add_argument('--auto_radius', help="Calculate head radius using brain mask and assuming it's a sphere", action='store_true')
     parser.add_argument('--skip_sec', help='Seconds to skip at start of each functional run. Default: 0', type=float, default=0)
     parser.add_argument('--lp_hz', help='Low-frequency cut-off for filtering signal. Default: 0.009', type=float, default=0.009)
     parser.add_argument('--hp_hz', help='High-frequency cut-off for filtering signal. Default: 0.08', type=float, default=0.08)
@@ -48,6 +49,7 @@ def main(source_dir, subject, results_path, **kwargs):
     fd_max = kwargs.get('fd_thr')
     skip_seconds = kwargs.get('skip_sec')
     brain_radius = kwargs.get('brain_radius')
+    auto_radius = True if 'auto_radius' in kwargs and kwargs['auto_radius'] else False
     session_id = kwargs['session_id'] if 'session_id' in kwargs else False
     lowpass_hz = kwargs.get('lp_hz')
     highpass_hz = kwargs.get('hp_hz')
@@ -121,6 +123,8 @@ def main(source_dir, subject, results_path, **kwargs):
             TR /= 1000 # account for ms in some headers
         logger.info(f'TR: {TR} s')
 
+        if auto_radius:
+            brain_radius = calculate_brain_radius(SUBJECT_DIR, cii_input)
         frisson_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
         framewise_displacement, mean_framewise_displacement = calculate_framewise_displacement(
             frisson_regressors[:, :6], FD_type=fd_type
@@ -438,7 +442,6 @@ def parcellate_data(data_path):
     return ptseries_files
 
 def create_functional_connectivity(parcellated_data_files, save_figs=False):
-
     for data_file in parcellated_data_files:
         ptseries_loaded = nb.load(data_file.resolve())
         ptseries_data = ptseries_loaded.get_fdata()
@@ -466,6 +469,24 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     plt.savefig(save_fig_name.resolve(), format='png', dpi=300)
     plt.close()
 
+def calculate_brain_radius(source_dir, cii_input):
+    brain_mask_files = source_dir.glob(f'{cii_input.group(1)}_*_{cii_input.group(3)}_desc-brain_mask.nii.gz')
+    if len(brain_mask_files) >= 1:
+        brain_mask_file = brain_mask_files[0]
+    else:
+        raise RuntimeError(f'No brain mask found for {cii_input.group(1)} {cii_input.group(3)}')
+
+    brain_mask = nb.load(source_dir / f'{brain_mask_file}')
+    brain_mask_data = brain_mask.get_fdata()
+    voxel_volume = np.prod(brain_mask.header.get_zooms())
+    total_mask_voxels = np.sum(brain_mask_data)
+    total_mask_volume = voxel_volume * total_mask_voxels
+
+    brain_radius = ((3 * total_mask_volume) / (4 * np.pi)) ** (1 / 3)
+    logger.info(f'{cii_input.group(1)} {cii_input.group(3)} brain radius estimated to be {brain_radius} mm')
+    return brain_radius
+    
+    
 def matrix_org3(figure_object, data_matrix, key, buffer, limits, color_map, colormap_data):
     dim_y, dim_x = data_matrix.shape
     if dim_y == dim_x:
