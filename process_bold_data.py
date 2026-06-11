@@ -470,21 +470,23 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     plt.close()
 
 def calculate_brain_radius(source_dir, cii_input):
-    brain_mask_files = source_dir.glob(f'{cii_input.group(1)}_*_{cii_input.group(3)}_desc-brain_mask.nii.gz')
-    if len(brain_mask_files) >= 1:
-        brain_mask_file = brain_mask_files[0]
-    else:
-        raise RuntimeError(f'No brain mask found for {cii_input.group(1)} {cii_input.group(3)}')
+    brain_mask_files = source_dir.glob(f'{cii_input.group(1)}*{cii_input.group(3)}_desc-brain_mask.nii.gz')
+    for brain_mask in brain_mask_files:
+        if brain_mask:
+            brain_mask_file = brain_mask
+            break
+        else:
+            raise RuntimeError(f'No brain mask found for {cii_input.group(1)} {cii_input.group(3)}')
 
-    brain_mask = nb.load(source_dir / f'{brain_mask_file}')
+    brain_mask = nb.load(f'{brain_mask_file.resolve()}')
     brain_mask_data = brain_mask.get_fdata()
     voxel_volume = np.prod(brain_mask.header.get_zooms())
     total_mask_voxels = np.sum(brain_mask_data)
     total_mask_volume = voxel_volume * total_mask_voxels
 
     brain_radius = ((3 * total_mask_volume) / (4 * np.pi)) ** (1 / 3)
-    logger.info(f'{cii_input.group(1)} {cii_input.group(3)} brain radius estimated to be {brain_radius} mm')
-    return brain_radius
+    logger.info(f'{cii_input.group(1)} {cii_input.group(3)} brain radius estimated to be {round(brain_radius)} mm')
+    return round(brain_radius)
     
     
 def matrix_org3(figure_object, data_matrix, key, buffer, limits, color_map, colormap_data):
