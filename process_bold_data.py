@@ -4,6 +4,7 @@ import nibabel as nb
 import numpy as np
 import pandas as pd
 
+from matplotlib.patches import Rectangle
 from pathlib import Path
 from subprocess import Popen, PIPE
 
@@ -12,7 +13,7 @@ OUTPUT_GRID = Path('/data/wheelock/data1/dierkerd/MNI152_T1_2mm.nii.gz')
 PARCEL_NAME = 'Gordon333'
 PARCELS = 333
 PARCEL_PATH = Path('/data/wheelock/data1/parcellations/IM/Gordon_333_IM_with_roi_ordered_16networks.mat')
-IM_333 = scipy.io.loadmat('/data/wheelock/data1/parcellations/IM/IM_Gordon_2016_333_Parcels_13nets.mat')
+IM_333 = scipy.io.loadmat('/data/wheelock/data1/parcellations/IM/IM_Gordon_2016_333_Parcels_13nets.mat')['IM']
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,7 +93,7 @@ def main(source_dir, subject, results_path, **kwargs):
     log_file = f'{subject}'
     if session_id:
         log_file += f'_{session_id}'
-    log_file += f'.log'
+    log_file += f'_bold_process.log'
     file_log_handler = logging.FileHandler((OUTPUT_DIR / f'{log_file}').resolve(), mode='a', encoding='utf-8')
     logger.addHandler(console_log_handler)
     logger.addHandler(file_log_handler)
@@ -270,7 +271,10 @@ def main(source_dir, subject, results_path, **kwargs):
     if save_figs:
         plot_framewise_displacement(OUTPUT_DIR, TR, combined_framewise_displacement, cii_input, combined_keepframes, combined=True)
 
-    parcellate_data(OUTPUT_DIR)
+    parcellated_files = parcellate_data(OUTPUT_DIR)
+
+    # if save_figs:
+    #     plot_connectivity(parcellated_files)
 
 def load_settings(source_dir, subject, run, session_id=None, settings_file=None):
     settings = {}
@@ -487,41 +491,81 @@ def calculate_brain_radius(source_dir, cii_input):
     brain_radius = ((3 * total_mask_volume) / (4 * np.pi)) ** (1 / 3)
     logger.info(f'{cii_input.group(1)} {cii_input.group(3)} brain radius estimated to be {round(brain_radius)} mm')
     return round(brain_radius)
+
+def plot_connectivity(parcellation_files, key, buffer, limits, color_map=None):
+    for parcellated_file in parcellation_files:
+        parcellated_data = nb.load(parcellated_file)
+        parcellated_matrix = parcellated_data.get_fdata()
+        parcellated_matrix = np.transpose(parcellated_matrix)
+        
+        correlation_matrix = np.corrcoef(parcellated_matrix)
+        ordered_corr_matrix = np.zeros_like(correlation_matrix)
+
+        im333_order = IM_333['order'][0] - 1 # matlab 1-indexed vs python's 0-indexed
+
+        for row_idx, row in enumerate(im333_order[0][:,0]):
+            for col_idx, col in enumerate(im333_order[0][:,0]):
+                ordered_corr_matrix[row_idx][col_idx] = correlation_matrix[row][col]
+
+        draw_matrix(ordered_corr_matrix, key, buffer, limits, color_map=None)
+        
+
+def draw_matrix(correlation_matrix, key, buffer, limits):
+
+        dim_y, dim_x = correlation_matrix.shape
+        plot_shape = 'square' if dim_x == dim_y else 'rect'
+
+        if color_map is None:
+            color_map = IM_333['cMap'][0][0]
+        key_vals = key[0][0]
+        networks = list(set(key[0][0][:, 1]))
+        networks = [x - 1 for x in networks] # IM files are matlab, so they are 1-indexed instead of 0
+        number_of_networks = len(networks)
+
+        figure, ax = plt.subplots(ncols=1, nrows=1, figsize=(8, 4))
+        connectivity_image = ax.imshow(correlation_matrix, colormap='jet', clim=[limits[0], limits[1]], extent=[0, dim_y, dim_x, 0])
+        ax.set_xlim(left=-buffer, right=dim_x)
+        ax.set_ylim(bottom=dim_y + buffer, top=0)
+        figure.colorbar(connectivity_image, ax=ax)
+
+        key_vals[:,1] = key_vals[:,1] - 1
     
-    
-def matrix_org3(figure_object, data_matrix, key, buffer, limits, color_map, colormap_data):
-    dim_y, dim_x = data_matrix.shape
-    if dim_y == dim_x:
-        type = 'square'
+        if plot_shape == 'square':
+            # Plot out the dividing lines between networks
+            for network1 in range(number_of_networks):
+                if any(np.argwhere(key_vals[:,1] == networks[network1])):
+                    plt.plot(
+                        [-buffer + 0.5, dim_x + 0.5], 
+                        [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5], 
+                        'k',
+                        linewidth=0.5
+                    )
+                    plt.plot(
+                        [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5],
+                        [0.5, dim_x + 0.5 + buffer], 
+                        'k',
+                        linewidth=0.5
+                    )
 
-    figure_object.imshow(data_matrix, colormap='jet', vmin=limits[0], vmax=limits[1], extent=(0.5 - buffer, dim_x + 0.5, 0.5, dim_y + buffer + 0.5))
+            # Plot color bars of networks
+            for network2 in range(number_of_networks):
+                if any(np.argwhere(key_vals[:,1] == networks[network2])):
+                    x = 0.5 - buffer
+                    y = np.argwhere(key_vals[:,1] == networks[network2])[0][0] - 0.5
+                    w = buffer
+                    h = np.argwhere(key_vals[:,1] == networks[network2])[-1][0] - y + 0.5
+                    small_rectangle = Rectangle((x, y), w, h, fc=color_map[networks[network2], :])
+                    ax.add_patch(small_rectangle)
 
-    networks = list(set(key[0][0][:,1]))
-    key_vals = key[0][0]
-    number_networks = len(networks)
-
-    if type == 'square':
-        for network1 in range(number_networks):
-            if any(np.argwhere(key_vals[:,1] == networks[network1])):
-                plt.plot([0.5, dim_x + 0.5], [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5], 'k')
-                plt.plot([np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5], [0.5, dim_x + 0.5], 'k')
-
-        for network2 in range(number_networks):
-            if any(np.argwhere(key_vals[:,1] == networks[network2])):
-                x = 0.5 - buffer
-                y = np.argwhere(key_vals[:,1] == networks[network2])[0] - 0.5
-                w = buffer
-                h = np.argwhere(key_vals[:,1] == networks[network2])[-1] - y + 0.5
-                figure_object.Rectangle((x, y), w, h, fc=color_map[networks[network2], :])
-
-                x = y
-                w = np.argwhere(key_vals[:,1] == networks[network2])[-1] - x + 0.5
-                y = dim_y + 0.5
-                h = buffer
-                figure_object.Rectangle()
+                    x = y
+                    w = np.argwhere(key_vals[:,1] == networks[network2])[-1][0] - x + 0.5
+                    y = dim_y + 0.5
+                    h = buffer
+                    small_rectangle = Rectangle((x, y), w, h, fc=color_map[networks[network2], :])
+                    ax.add_patch(small_rectangle)
            
-    else:
-        raise Exception("This feature has not been implemented")
+        else:
+            raise Exception("This feature has not been implemented")
     
 
 
