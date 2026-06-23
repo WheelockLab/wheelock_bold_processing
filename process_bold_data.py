@@ -532,17 +532,19 @@ def draw_matrix(correlation_matrix, key, buffer, limits):
     
         if plot_shape == 'square':
             # Plot out the dividing lines between networks
+            # plt.plot([0, dim_x + 1], [dim_y + 1, dim_y + 1], 'k', linewidth=0.5)
+            plt.plot([0, 0], [0, dim_y + buffer], 'k', linewidth=0.5)
             for network1 in range(number_of_networks):
                 if any(np.argwhere(key_vals[:,1] == networks[network1])):
                     plt.plot(
-                        [-buffer + 0.5, dim_x + 0.5], 
-                        [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5], 
+                        [-buffer, dim_x], 
+                        [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 1, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 1], 
                         'k',
                         linewidth=0.5
                     )
                     plt.plot(
-                        [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 0.5],
-                        [0.5, dim_x + 0.5 + buffer], 
+                        [np.argwhere(key_vals[:,1] == networks[network1])[-1] + 1, np.argwhere(key_vals[:,1] == networks[network1])[-1] + 1],
+                        [0, dim_y + buffer], 
                         'k',
                         linewidth=0.5
                     )
@@ -550,16 +552,16 @@ def draw_matrix(correlation_matrix, key, buffer, limits):
             # Plot color bars of networks
             for network2 in range(number_of_networks):
                 if any(np.argwhere(key_vals[:,1] == networks[network2])):
-                    x = 0.5 - buffer
-                    y = np.argwhere(key_vals[:,1] == networks[network2])[0][0] - 0.5
+                    x = -buffer
+                    y = np.argwhere(key_vals[:,1] == networks[network2])[0][0]
                     w = buffer
-                    h = np.argwhere(key_vals[:,1] == networks[network2])[-1][0] - y + 0.5
+                    h = np.argwhere(key_vals[:,1] == networks[network2])[-1][0] - y + 1
                     small_rectangle = Rectangle((x, y), w, h, fc=color_map[networks[network2], :])
                     ax.add_patch(small_rectangle)
 
                     x = y
-                    w = np.argwhere(key_vals[:,1] == networks[network2])[-1][0] - x + 0.5
-                    y = dim_y + 0.5
+                    w = np.argwhere(key_vals[:,1] == networks[network2])[-1][0] - x + 1
+                    y = dim_y
                     h = buffer
                     small_rectangle = Rectangle((x, y), w, h, fc=color_map[networks[network2], :])
                     ax.add_patch(small_rectangle)
