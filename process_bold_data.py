@@ -55,6 +55,8 @@ def main(source_dir, subject, results_path, **kwargs):
     lowpass_hz = kwargs.get('lp_hz')
     highpass_hz = kwargs.get('hp_hz')
     filter_fd = True if 'filter_fd' in kwargs and kwargs['filter_fd'] else False
+    if filter_fd and fd_max == 0.2:
+        fd_max = 0.1
 
     # Set up all output directories
     OUTPUT_DIR = Path(results_path)
@@ -127,9 +129,9 @@ def main(source_dir, subject, results_path, **kwargs):
 
         if auto_radius:
             brain_radius = calculate_brain_radius(SUBJECT_DIR, cii_input)
-        frisson_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
+        friston_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
         framewise_displacement, mean_framewise_displacement = calculate_framewise_displacement(
-            frisson_regressors[:, :6], FD_type=fd_type
+            friston_regressors[:, :6], FD_type=fd_type
         )
         framewise_displacement_file_name = OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_framewise_displacement.txt'
         np.savetxt(framewise_displacement_file_name.resolve(), framewise_displacement)
@@ -142,7 +144,7 @@ def main(source_dir, subject, results_path, **kwargs):
         keepframes[:skip_frames] = False
 
         if save_figs:
-            plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes)
+            plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, fd_max, filter_fd=filter_fd)
 
         sampling_freq = 1 / TR
         nyquist_freq = sampling_freq / 2
@@ -172,7 +174,7 @@ def main(source_dir, subject, results_path, **kwargs):
             keepframes[:skip_frames] = False
             
             if save_figs:
-                plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, suffix='filtered')
+                plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, fd_max, suffix='filtered', filter_fd=filter_fd)
 
         if cii_input == cii_input_files[0]:
             combined_framewise_displacement = framewise_displacement.copy()
@@ -302,7 +304,7 @@ def main(source_dir, subject, results_path, **kwargs):
         
     np.savetxt((OUTPUT_DIR / f'{combined_filename}_combined_framewise_displacement.txt').resolve(), combined_framewise_displacement)
     if save_figs:
-        plot_framewise_displacement(OUTPUT_DIR, TR, combined_framewise_displacement, cii_input, combined_keepframes, combined=True)
+        plot_framewise_displacement(OUTPUT_DIR, TR, combined_framewise_displacement, cii_input, combined_keepframes, fd_max, combined=True, filter_fd=filter_fd)
 
     parcellate_data(OUTPUT_DIR)
 
@@ -485,9 +487,11 @@ def create_functional_connectivity(parcellated_data_files, save_figs=False):
             IM_333 = IM_333.IM
             plt.figure(figsize=(8, 4))
             
-def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, combined=False, suffix=''):
+def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, fd_max, combined=False, suffix='', filter_fd=False):
     fig = plt.figure(figsize=(8, 4))
     ax = plt.axes()
+
+    # create time data points to plot data against
     ticks = [x for x in range(len(framewise_displacement))]
     tick_labels = [int(x * tr) for x in range(len(framewise_displacement))]
     for j in np.where(keepframes == 0)[0]:
@@ -495,8 +499,18 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     plt.plot(ticks, framewise_displacement, linewidth=1)
     ax.set_xlim(left=0, right=ticks[-1])
     plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
+
     plt.title(f'Framewise Displacement\nTotal Time: {int(tr * len(keepframes))} seconds Usable Time: {int(tr * len(np.where(keepframes == True)[0]))} seconds {int(100 * len(np.where(keepframes == True)[0]) / len(keepframes))}%')
     plt.xlabel('Time (s)')
+
+    # if autoscale of plot goes above 2, then cap scaling at 2
+    if ax.viewLim.y0 > 2 or ax.viewLim.y1 > 2:
+        ax.set_ylim(bottom=0, top=2.0)
+
+    plt.axhline(y=fd_max, color=[1, 0, 0], alpha=0.5, linestyle='--')
+    ax.text(0, fd_max, "{:.1f} ".format(fd_max), color=[1, 0, 0], alpha=0.5, verticalalignment='center', horizontalalignment='right')
+
+    # save plot of data    
     fig_file_name = f'{cii_input_match.group(1)}_{cii_input_match.group(3)}'
     if len(suffix) > 0:
         fig_file_name = f'{fig_file_name}_{suffix}'
