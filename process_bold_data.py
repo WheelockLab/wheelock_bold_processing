@@ -196,17 +196,7 @@ def main(source_dir, subject, results_path, **kwargs):
         detrend_data = detrend_manual(detrend_data, keepframes)
 
         if save_figs:
-            crange = [-200, 200] # using +/-2% as Power's papers, DCAN ABCD uses +/-6%
-            plt.figure(figsize=(8, 4))
-            im = plt.imshow(detrend_data.transpose(), aspect='auto', cmap='gray')
-            plt.colorbar(location='right')
-            im.set_clim(crange)
-            plt.plot(np.where(keepframes == 0)[0], np.repeat(0, sum(keepframes == 0)), 'r|')
-            plt.yticks([])
-            plt.xlabel('TR')
-            plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_all.png').resolve(), format='png', dpi=300)
-            plt.close()
-
+            plot_grayordinates(OUTPUT_DIR, detrend_data, keepframes, TR, cii_input)
 
             ## 5/12/26 Commenting these out because I'm unsure of what they are actually plotting - Jim
             
@@ -509,13 +499,13 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     if ax.viewLim.y0 > 2 or ax.viewLim.y1 > 2:
         ax.set_ylim(bottom=0, top=2.0)
 
+    # add threshold and mark points above
     greater_threshold_2 = np.full(num_pts, True)
     greater_threshold_1 = np.full(num_pts, True)
     greater_threshold_2 = framewise_displacement > 0.2
     greater_threshold_1 = (0.1 < framewise_displacement) & (framewise_displacement <= 0.2)
     num_greater_threshold_1 = num_pts - sum(greater_threshold_1)
     num_greater_threshold_2 = num_pts - sum(greater_threshold_2)
-    
 
     red = [1, 0, 0]
     green = [0, 0.8, 0]
@@ -541,6 +531,39 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
         save_fig_name = output_dir / f'{cii_input_match.group(1)}_combined_fd_trace.png'
     plt.savefig(save_fig_name.resolve(), format='png', dpi=300)
     plt.close()
+
+
+def plot_grayordinates(output_dir, detrended_data, keepframes, tr, cii_input_match):
+    total_graypoints = 91282
+    total_cortex = 32492
+    total_subcortical = 64894
+    
+    fig = plt.figure(figsize=(8, 4))
+    ax = plt.axes()
+    gray_plot = ax.imshow(detrended_data.transpose(), aspect='auto', cmap='gray')
+    num_pts = len(keepframes)
+
+    ticks = [x for x in range(num_pts)]
+    tick_labels = [int(x * tr) for x in range(num_pts)]
+
+    crange = [-200, 200] # using +/-2% as Power's papers, DCAN ABCD uses +/-6%
+    gray_plot.set_clim(crange)
+    fig.colorbar(gray_plot, location='right', ax=ax, shrink=0.7)
+    dropframes = np.where(keepframes==0)[0]
+
+    plt.axhline(y=total_subcortical,  linestyle='--', color=[0, 0, 0], alpha=0.3)
+    for v_pt in dropframes.tolist():
+        plt.axvline(x=v_pt, linestyle='--', alpha=0.2, color=[1, 0, 0], linewidth=0.5)
+    # plt.plot(np.where(keepframes == 0)[0], np.repeat(0, sum(keepframes == 0)), 'r|', linewidth=0.1)
+    plt.yticks([])    
+    ax.set_xlim(left=0, right=ticks[-1])
+    plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
+    plt.xlabel('Time (s)')
+    ax.text(num_pts, (total_subcortical / 2), 'Subcortical', rotation='vertical', horizontalalignment='left', verticalalignment='center', fontsize='small')
+    ax.text(num_pts, (total_subcortical + (total_cortex / 2)), 'Cortex', rotation='vertical', horizontalalignment='left', verticalalignment='center', fontsize='small')
+    plt.savefig((output_dir / f'{cii_input_match.group(1)}_{cii_input_match.group(3)}_grayplots_all.png').resolve(), format='png', dpi=300)
+    plt.close()
+
 
 def calculate_brain_radius(source_dir, cii_input):
     brain_mask_files = source_dir.glob(f'{cii_input.group(1)}*{cii_input.group(3)}_desc-brain_mask.nii.gz')
