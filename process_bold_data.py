@@ -55,8 +55,8 @@ def main(source_dir, subject, results_path, **kwargs):
     lowpass_hz = kwargs.get('lp_hz')
     highpass_hz = kwargs.get('hp_hz')
     filter_fd = True if 'filter_fd' in kwargs and kwargs['filter_fd'] else False
-    if filter_fd and fd_max == 0.2:
-        fd_max = 0.1
+    # if filter_fd and fd_max == 0.2:
+    #     fd_max = 0.1
 
     # Set up all output directories
     OUTPUT_DIR = Path(results_path)
@@ -490,12 +490,14 @@ def create_functional_connectivity(parcellated_data_files, save_figs=False):
 def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, fd_max, combined=False, suffix='', filter_fd=False):
     fig = plt.figure(figsize=(8, 4))
     ax = plt.axes()
+    num_pts = len(framewise_displacement)
 
     # create time data points to plot data against
-    ticks = [x for x in range(len(framewise_displacement))]
-    tick_labels = [int(x * tr) for x in range(len(framewise_displacement))]
-    for j in np.where(keepframes == 0)[0]:
-        plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
+    ticks = [x for x in range(num_pts)]
+    tick_labels = [int(x * tr) for x in range(num_pts)]
+    # remove the vertical gray lines that originally indicated censored frame
+    # for j in np.where(keepframes == 0)[0]:
+    #     plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
     plt.plot(ticks, framewise_displacement, linewidth=1)
     ax.set_xlim(left=0, right=ticks[-1])
     plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
@@ -507,8 +509,28 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     if ax.viewLim.y0 > 2 or ax.viewLim.y1 > 2:
         ax.set_ylim(bottom=0, top=2.0)
 
-    plt.axhline(y=fd_max, color=[1, 0, 0], alpha=0.5, linestyle='--')
-    ax.text(0, fd_max, "{:.1f} ".format(fd_max), color=[1, 0, 0], alpha=0.5, verticalalignment='center', horizontalalignment='right')
+    greater_threshold_2 = np.full(num_pts, True)
+    greater_threshold_1 = np.full(num_pts, True)
+    greater_threshold_2 = framewise_displacement > 0.2
+    greater_threshold_1 = (0.1 < framewise_displacement) & (framewise_displacement <= 0.2)
+    num_greater_threshold_1 = num_pts - sum(greater_threshold_1)
+    num_greater_threshold_2 = num_pts - sum(greater_threshold_2)
+    
+
+    red = [1, 0, 0]
+    green = [0, 0.8, 0]
+    plt.axhline(y=0.2, color=red, alpha=0.6, linestyle='--')
+    ax.text(0, 0.2, "0.2 ", color=red, alpha=0.6, verticalalignment='center', horizontalalignment='right', fontsize='x-small')
+    ax.text(num_pts, 0.2, f' {num_greater_threshold_2} frames', color=[0, 0, 0], alpha=0.6, verticalalignment='center', horizontalalignment='left', fontsize='x-small')
+    plt.axhline(y=0.1, color=green, alpha=0.6, linestyle=':')
+    ax.text(0, 0.1, "0.1 ", color=green, alpha=0.6, verticalalignment='center', horizontalalignment='right', fontsize='x-small')
+    ax.text(num_pts, 0.1, f' {num_greater_threshold_1} frames', color=[0, 0, 0], alpha=0.6, verticalalignment='center', horizontalalignment='left', fontsize='x-small')
+    for idx, val in enumerate(framewise_displacement):
+        if greater_threshold_1[idx]:
+            plt.plot(idx, framewise_displacement[idx], marker='.', color=green, markerfacecolor=green, markeredgecolor=green, alpha=0.6)
+        elif greater_threshold_2[idx]:
+            plt.plot(idx, framewise_displacement[idx], marker='.', color=red, markerfacecolor=red, markeredgecolor=red, alpha=0.6)
+    
 
     # save plot of data    
     fig_file_name = f'{cii_input_match.group(1)}_{cii_input_match.group(3)}'
