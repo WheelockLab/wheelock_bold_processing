@@ -503,8 +503,8 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
     greater_threshold_2 = np.full(num_pts, True)
     greater_threshold_1 = np.full(num_pts, True)
     greater_threshold_2 = framewise_displacement > 0.2
-    greater_threshold_1 = (0.1 < framewise_displacement) & (framewise_displacement <= 0.2)
-    num_greater_threshold_1 = num_pts - sum(greater_threshold_1)
+    greater_threshold_1 = (framewise_displacement > 0.1) & (framewise_displacement <= 0.2)
+    num_greater_threshold_1 = num_pts - sum(greater_threshold_1) - sum(greater_threshold_2)
     num_greater_threshold_2 = num_pts - sum(greater_threshold_2)
 
     red = [1, 0, 0]
