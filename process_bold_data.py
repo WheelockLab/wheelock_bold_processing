@@ -55,6 +55,8 @@ def main(source_dir, subject, results_path, **kwargs):
     lowpass_hz = kwargs.get('lp_hz')
     highpass_hz = kwargs.get('hp_hz')
     filter_fd = True if 'filter_fd' in kwargs and kwargs['filter_fd'] else False
+    # if filter_fd and fd_max == 0.2:
+    #     fd_max = 0.1
 
     # Set up all output directories
     OUTPUT_DIR = Path(results_path)
@@ -127,9 +129,9 @@ def main(source_dir, subject, results_path, **kwargs):
 
         if auto_radius:
             brain_radius = calculate_brain_radius(SUBJECT_DIR, cii_input)
-        frisson_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
+        friston_regressors = make_friston_regressors(settings['movement_regressors'].to_numpy(), brain_radius)
         framewise_displacement, mean_framewise_displacement = calculate_framewise_displacement(
-            frisson_regressors[:, :6], FD_type=fd_type
+            friston_regressors[:, :6], FD_type=fd_type
         )
         framewise_displacement_file_name = OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_framewise_displacement.txt'
         np.savetxt(framewise_displacement_file_name.resolve(), framewise_displacement)
@@ -142,7 +144,7 @@ def main(source_dir, subject, results_path, **kwargs):
         keepframes[:skip_frames] = False
 
         if save_figs:
-            plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes)
+            plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, fd_max, filter_fd=filter_fd)
 
         sampling_freq = 1 / TR
         nyquist_freq = sampling_freq / 2
@@ -172,7 +174,7 @@ def main(source_dir, subject, results_path, **kwargs):
             keepframes[:skip_frames] = False
             
             if save_figs:
-                plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, suffix='filtered')
+                plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, fd_max, suffix='filtered', filter_fd=filter_fd)
 
         if cii_input == cii_input_files[0]:
             combined_framewise_displacement = framewise_displacement.copy()
@@ -194,17 +196,7 @@ def main(source_dir, subject, results_path, **kwargs):
         detrend_data = detrend_manual(detrend_data, keepframes)
 
         if save_figs:
-            crange = [-200, 200] # using +/-2% as Power's papers, DCAN ABCD uses +/-6%
-            plt.figure(figsize=(8, 4))
-            im = plt.imshow(detrend_data.transpose(), aspect='auto', cmap='gray')
-            plt.colorbar(location='right')
-            im.set_clim(crange)
-            plt.plot(np.where(keepframes == 0)[0], np.repeat(0, sum(keepframes == 0)), 'r|')
-            plt.yticks([])
-            plt.xlabel('TR')
-            plt.savefig((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_grayplots_all.png').resolve(), format='png', dpi=300)
-            plt.close()
-
+            plot_grayordinates(OUTPUT_DIR, detrend_data, keepframes, TR, cii_input)
 
             ## 5/12/26 Commenting these out because I'm unsure of what they are actually plotting - Jim
             
@@ -302,7 +294,7 @@ def main(source_dir, subject, results_path, **kwargs):
         
     np.savetxt((OUTPUT_DIR / f'{combined_filename}_combined_framewise_displacement.txt').resolve(), combined_framewise_displacement)
     if save_figs:
-        plot_framewise_displacement(OUTPUT_DIR, TR, combined_framewise_displacement, cii_input, combined_keepframes, combined=True)
+        plot_framewise_displacement(OUTPUT_DIR, TR, combined_framewise_displacement, cii_input, combined_keepframes, fd_max, combined=True, filter_fd=filter_fd)
 
     parcellate_data(OUTPUT_DIR)
 
@@ -485,18 +477,52 @@ def create_functional_connectivity(parcellated_data_files, save_figs=False):
             IM_333 = IM_333.IM
             plt.figure(figsize=(8, 4))
             
-def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, combined=False, suffix=''):
+def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_input_match, keepframes, fd_max, combined=False, suffix='', filter_fd=False):
     fig = plt.figure(figsize=(8, 4))
     ax = plt.axes()
-    ticks = [x for x in range(len(framewise_displacement))]
-    tick_labels = [int(x * tr) for x in range(len(framewise_displacement))]
-    for j in np.where(keepframes == 0)[0]:
-        plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
+    num_pts = len(framewise_displacement)
+
+    # create time data points to plot data against
+    ticks = [x for x in range(num_pts)]
+    tick_labels = [int(x * tr) for x in range(num_pts)]
+    # remove the vertical gray lines that originally indicated censored frame
+    # for j in np.where(keepframes == 0)[0]:
+    #     plt.axvline(x=j, color=[0.5, 0.5, 0.5], alpha=0.5)
     plt.plot(ticks, framewise_displacement, linewidth=1)
     ax.set_xlim(left=0, right=ticks[-1])
     plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
+
     plt.title(f'Framewise Displacement\nTotal Time: {int(tr * len(keepframes))} seconds Usable Time: {int(tr * len(np.where(keepframes == True)[0]))} seconds {int(100 * len(np.where(keepframes == True)[0]) / len(keepframes))}%')
     plt.xlabel('Time (s)')
+
+    # if autoscale of plot goes above 2, then cap scaling at 2
+    if ax.viewLim.y0 > 2 or ax.viewLim.y1 > 2:
+        ax.set_ylim(bottom=0, top=2.0)
+
+    # add threshold and mark points above
+    greater_threshold_2 = np.full(num_pts, True)
+    greater_threshold_1 = np.full(num_pts, True)
+    greater_threshold_2 = framewise_displacement > 0.2
+    greater_threshold_1 = (framewise_displacement > 0.1) & (framewise_displacement <= 0.2)
+    num_greater_threshold_1 = num_pts - sum(greater_threshold_1) - sum(greater_threshold_2)
+    num_greater_threshold_2 = num_pts - sum(greater_threshold_2)
+
+    red = [1, 0, 0]
+    green = [0, 0.8, 0]
+    plt.axhline(y=0.2, color=red, alpha=0.6, linestyle='--')
+    ax.text(0, 0.2, "0.2 ", color=red, alpha=0.6, verticalalignment='center', horizontalalignment='right', fontsize='x-small')
+    ax.text(num_pts, 0.2, f' {num_greater_threshold_2} frames', color=[0, 0, 0], alpha=0.6, verticalalignment='center', horizontalalignment='left', fontsize='x-small')
+    plt.axhline(y=0.1, color=green, alpha=0.6, linestyle=':')
+    ax.text(0, 0.1, "0.1 ", color=green, alpha=0.6, verticalalignment='center', horizontalalignment='right', fontsize='x-small')
+    ax.text(num_pts, 0.1, f' {num_greater_threshold_1} frames', color=[0, 0, 0], alpha=0.6, verticalalignment='center', horizontalalignment='left', fontsize='x-small')
+    for idx, val in enumerate(framewise_displacement):
+        if greater_threshold_1[idx]:
+            plt.plot(idx, framewise_displacement[idx], marker='.', color=green, markerfacecolor=green, markeredgecolor=green, alpha=0.6)
+        elif greater_threshold_2[idx]:
+            plt.plot(idx, framewise_displacement[idx], marker='.', color=red, markerfacecolor=red, markeredgecolor=red, alpha=0.6)
+    
+
+    # save plot of data    
     fig_file_name = f'{cii_input_match.group(1)}_{cii_input_match.group(3)}'
     if len(suffix) > 0:
         fig_file_name = f'{fig_file_name}_{suffix}'
@@ -505,6 +531,39 @@ def plot_framewise_displacement(output_dir, tr, framewise_displacement, cii_inpu
         save_fig_name = output_dir / f'{cii_input_match.group(1)}_combined_fd_trace.png'
     plt.savefig(save_fig_name.resolve(), format='png', dpi=300)
     plt.close()
+
+
+def plot_grayordinates(output_dir, detrended_data, keepframes, tr, cii_input_match):
+    total_graypoints = 91282
+    total_cortex = 32492
+    total_subcortical = 64894
+    
+    fig = plt.figure(figsize=(8, 4))
+    ax = plt.axes()
+    gray_plot = ax.imshow(detrended_data.transpose(), aspect='auto', cmap='gray')
+    num_pts = len(keepframes)
+
+    ticks = [x for x in range(num_pts)]
+    tick_labels = [int(x * tr) for x in range(num_pts)]
+
+    crange = [-200, 200] # using +/-2% as Power's papers, DCAN ABCD uses +/-6%
+    gray_plot.set_clim(crange)
+    fig.colorbar(gray_plot, location='right', ax=ax, shrink=0.7)
+    dropframes = np.where(keepframes==0)[0]
+
+    plt.axhline(y=total_subcortical,  linestyle='--', color=[0, 0, 0], alpha=0.3)
+    for v_pt in dropframes.tolist():
+        plt.axvline(x=v_pt, linestyle='--', alpha=0.2, color=[1, 0, 0], linewidth=0.5)
+    # plt.plot(np.where(keepframes == 0)[0], np.repeat(0, sum(keepframes == 0)), 'r|', linewidth=0.1)
+    plt.yticks([])    
+    ax.set_xlim(left=0, right=ticks[-1])
+    plt.xticks(np.arange(0, ticks[-1], step=100), np.arange(0, tick_labels[-1], step=100 * tr))
+    plt.xlabel('Time (s)')
+    ax.text(num_pts, (total_subcortical / 2), 'Subcortical', rotation='vertical', horizontalalignment='left', verticalalignment='center', fontsize='small')
+    ax.text(num_pts, (total_subcortical + (total_cortex / 2)), 'Cortex', rotation='vertical', horizontalalignment='left', verticalalignment='center', fontsize='small')
+    plt.savefig((output_dir / f'{cii_input_match.group(1)}_{cii_input_match.group(3)}_grayplots_all.png').resolve(), format='png', dpi=300)
+    plt.close()
+
 
 def calculate_brain_radius(source_dir, cii_input):
     brain_mask_files = source_dir.glob(f'{cii_input.group(1)}*{cii_input.group(3)}_desc-brain_mask.nii.gz')
