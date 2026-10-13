@@ -4,6 +4,7 @@ import nibabel as nb
 import numpy as np
 import pandas as pd
 
+from collections import defaultdict
 from pathlib import Path
 from subprocess import Popen, PIPE
 
@@ -13,6 +14,8 @@ PARCEL_NAME = 'Gordon333'
 PARCELS = 333
 PARCEL_PATH = Path('/data/wheelock/data1/parcellations/IM/Gordon_333_IM_with_roi_ordered_16networks.mat')
 IM_333 = scipy.io.loadmat('/data/wheelock/data1/parcellations/IM/IM_Gordon_2016_333_Parcels_13nets.mat')
+WB_COMMAND = '/usr/local/bin/wb_command'
+DOF_THRESHOLD = 20
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +106,7 @@ def main(source_dir, subject, results_path, **kwargs):
 
     # Start processing files
     cii_input_files.sort(key=lambda x: x.group(3))
+    keeprun_by_dtseries = defaultdict(bool)
     for cii_input in cii_input_files:
         settings = load_settings(source_dir, cii_input.group(1), cii_input.group(3), session_id=kwargs.get('session_id'), settings_file=kwargs.get('settings'))
         input_file = SUBJECT_DIR / f'{cii_input.group(0)}'
@@ -148,8 +152,8 @@ def main(source_dir, subject, results_path, **kwargs):
 
         sampling_freq = 1 / TR
         nyquist_freq = sampling_freq / 2
-
-        if filter_fd:
+       
+        if filter_fd:            
             respiration_lowpass = 9 / 60
             respiration_highpass = 30 / 60
             if respiration_highpass > nyquist_freq:
@@ -175,6 +179,10 @@ def main(source_dir, subject, results_path, **kwargs):
             
             if save_figs:
                 plot_framewise_displacement(OUTPUT_DIR, TR, framewise_displacement, cii_input, keepframes, fd_max, suffix='filtered', filter_fd=filter_fd)
+
+        dtseries_dof = calculate_dof(lowpass_hz, highpass_hz, gsr, sum(keepframes))
+        if dtseries_dof > DOF_THRESHOLD:
+            keeprun_by_dtseries[input_file] = True
 
         if cii_input == cii_input_files[0]:
             combined_framewise_displacement = framewise_displacement.copy()
@@ -274,23 +282,8 @@ def main(source_dir, subject, results_path, **kwargs):
 
         if cii_input == cii_input_files[0]:
             combined_filename = f'{cii_input.group(1)}_task-rest_run-combined_{cii_input.group(4)}'
-            shutil.copy((OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_{cii_input.group(4)}_postproc.dtseries.nii').resolve(), (OUTPUT_DIR / f'{combined_filename}_postproc.dtseries.nii').resolve())
-        else:
-            concatanate_cmd = [
-                '/usr/local/bin/wb_command',
-                '-cifti-merge',
-                (OUTPUT_DIR / f'{combined_filename}_postproc.dtseries.nii').resolve(),
-                '-cifti',
-                (OUTPUT_DIR / f'{combined_filename}_postproc.dtseries.nii').resolve(),
-                '-cifti',
-                (OUTPUT_DIR / f'{cii_input.group(1)}_{cii_input.group(3)}_{cii_input.group(4)}_postproc.dtseries.nii').resolve()
-            ]
-            with Popen(concatanate_cmd, stdout=PIPE, stderr=PIPE) as p:
-                while p.poll() is None:
-                    for line in p.stdout:
-                        print(line.decode(), end='')
-                if p.poll() != 0:
-                    raise RuntimeError('Error during concatating runs')
+
+    concatenate_dtseries(keeprun_by_dtseries, combined_filename)
         
     np.savetxt((OUTPUT_DIR / f'{combined_filename}_combined_framewise_displacement.txt').resolve(), combined_framewise_displacement)
     if save_figs:
@@ -583,7 +576,36 @@ def calculate_brain_radius(source_dir, cii_input):
     brain_radius = ((3 * total_mask_volume) / (4 * np.pi)) ** (1 / 3)
     logger.info(f'{cii_input.group(1)} {cii_input.group(3)} brain radius estimated to be {round(brain_radius)} mm')
     return round(brain_radius)
+
+def concatenate_dtseries(include_by_dtseries_filename, output_file):
+
+    if all(val == False for val in include_by_dtseries_filename.values()):
+        print('No data passes degrees of freedome quality control.')
+        return
+
+    concatenate_cmd = [
+            WB_COMMAND,
+            '-cifti-merge',
+            output_file
+    ]      
+    for dtseries_file, include in include_by_dtseries_filename.items():
+        if include:
+            concatenate_cmd.append('-cifti')
+            concatenate_cmd.append(dtseries_file)
+
+    with Popen(concatenate_cmd, stdout=PIPE, stderr=PIPE) as p:
+        while p.poll() is None:
+            for line in p.stdout:
+                print(line.decode(), end='')
+        if p.poll() != 0:
+            raise RuntimeError('Error concatating dtseries runs')       
+
+def calculate_dof(lp_hz, hp_hz, gsr, uncensored_frames):
+    num_parameters = 24
+    if gsr:
+        num_parameters = 30
     
+    return (uncensored_frames - num_parameters) * (hp_hz - lp_hz)
     
 def matrix_org3(figure_object, data_matrix, key, buffer, limits, color_map, colormap_data):
     dim_y, dim_x = data_matrix.shape
